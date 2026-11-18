@@ -281,6 +281,24 @@ def _move_to_done(service, folder_id: str, done_root_id: str, ch_id: str):
     ).execute()
 
 
+def _update_metadata_file(service, file_id: str, metadata: dict):
+    """Simpan status upload ke metadata Drive agar retry tidak mengunggah duplikat."""
+    from googleapiclient.http import MediaFileUpload
+
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", encoding="utf-8", delete=False
+        ) as tmp:
+            temp_path = tmp.name
+            json.dump(metadata, tmp, ensure_ascii=False, indent=2)
+        media = MediaFileUpload(temp_path, mimetype="application/json", resumable=False)
+        service.files().update(fileId=file_id, media_body=media).execute()
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
 # ─── YouTube upload ───────────────────────────────────────────────────────────
 
 def _upload_to_youtube(yt_service, video_path: str, thumbnail_path: str, metadata: dict) -> str:
@@ -396,6 +414,12 @@ def process_queue():
                     )
                     continue
 
+                if metadata.get("status") == "uploaded":
+                    # Upload sebelumnya sudah sukses; hanya ulangi pemindahan arsip.
+                    _move_to_done(drive, folder_id, done_id, ch_id)
+                    logger.info(f"[{ch_id}] {folder_name} sudah terunggah; dipindahkan ke done.")
+                    continue
+
                 if metadata.get("status") != "ready":
                     continue
 
@@ -445,6 +469,14 @@ def process_queue():
                 try:
                     url = _upload_to_youtube(youtube, video_path, thumb_path, metadata)
                     logger.info(f"[{ch_id}] ✅ {url}")
+
+                    # Simpan penanda sukses sebelum memindahkan folder. Jika proses
+                    # berhenti setelah upload, polling berikutnya tidak upload ulang.
+                    metadata["status"] = "uploaded"
+                    metadata["uploaded_url"] = url
+                    metadata["uploaded_at"] = datetime.now(timezone.utc).isoformat()
+                    _update_metadata_file(drive, meta_id, metadata)
+
                     _status["uploads_today"]          += 1
                     _status["per_channel"][ch_id]     += 1
                     _move_to_done(drive, folder_id, done_id, ch_id)
