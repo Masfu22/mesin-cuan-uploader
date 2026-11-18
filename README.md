@@ -35,7 +35,7 @@ Configure these in the uploader hosting provider's environment/secrets page. Use
 | `TOKEN_CH_EN_PSYCH` | OAuth authorized-user JSON for channel `ch_en_psych` |
 | `YOUTUBE_PRIVACY_STATUS` | `private` (default), `unlisted`, or `public` |
 
-A channel whose token variable is empty is skipped. At least one channel token is required for uploads.
+A channel whose token variable is empty is skipped. At least one channel token is required for uploads. The health endpoint reports `waiting_for_credentials` until at least one channel token is configured; it lists channel IDs only and never returns token values.
 
 ### Optional environment variables
 
@@ -96,7 +96,7 @@ After reviewing test videos and confirming the channel configuration, set `YOUTU
 
 The HTTP health endpoint listens on `PORT` (default 8080) and returns JSON status, last poll time, and daily upload/error counts. Configure the hosting provider's health check to call the service root URL. Run a single service instance/replica so two pollers do not process the same Drive queue simultaneously.
 
-Telegram notifications are optional. The service polls every five minutes by default and waits 60 seconds between uploads.
+Telegram notifications are optional. The service polls every five minutes by default and waits 60 seconds between uploads. Error logs record exception types rather than raw provider error text to reduce the risk of leaking credential-bearing URLs or responses. Never enable shell tracing or print environment variables in deployment logs.
 
 ## Validation
 
