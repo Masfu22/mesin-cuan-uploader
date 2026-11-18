@@ -26,4 +26,4 @@ jobs:
       - name: Compile Python source
         run: python -m py_compile main.py
       - name: Run unit tests
-        run: pytest -q
+        run: python -m pytest -q
