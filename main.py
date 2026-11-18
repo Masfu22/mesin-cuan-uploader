@@ -35,7 +35,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("uploader")
 
-POLL_INTERVAL_SEC = 5 * 60  # 5 menit
+POLL_INTERVAL_SEC = max(30, int(os.environ.get("POLL_INTERVAL_SEC", "300")))  # minimum 30 detik
 GDRIVE_ROOT       = "mesin_cuan"
 QUEUE_FOLDER      = "queue"
 DONE_FOLDER       = "done"
