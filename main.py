@@ -47,6 +47,14 @@ CHANNELS = [
     {"id": "ch_en_psych",  "env_key": "TOKEN_CH_EN_PSYCH",  "language": "en"},
 ]
 
+def _configured_channels() -> list[str]:
+    """Return channel IDs with a non-empty token variable; never expose token values."""
+    return [
+        channel["id"] for channel in CHANNELS
+        if os.environ.get(channel["env_key"], "").strip()
+    ]
+
+
 _status = {
     "last_poll":      None,
     "uploads_today":  0,
@@ -91,7 +99,8 @@ def _send_telegram(message: str):
             if resp.status != 200:
                 logger.warning(f"Telegram response: {resp.status}")
     except Exception as e:
-        logger.warning(f"Gagal kirim Telegram notif: {e}")
+        # Exception dari URL Telegram berpotensi memuat token pada path URL.
+        logger.warning("Gagal kirim Telegram notif (%s)", type(e).__name__)
 
 
 # ─── Daily Summary ────────────────────────────────────────────────────────────
@@ -144,8 +153,10 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
+        enabled_channels = _configured_channels()
         resp = json.dumps({
-            "status":        "running",
+            "status":        "running" if enabled_channels else "waiting_for_credentials",
+            "configured_channels": enabled_channels,
             "last_poll":     _status["last_poll"],
             "uploads_today": _status["uploads_today"],
             "errors_today":  _status["errors_today"],
@@ -499,7 +510,7 @@ def process_queue():
                     )
 
                 except Exception as e:
-                    logger.error(f"[{ch_id}] Upload gagal: {e}")
+                    logger.error("[%s] Upload gagal (%s)", ch_id, type(e).__name__)
                     _status["errors_today"] += 1
 
                     # ❌ Notif gagal
@@ -507,7 +518,7 @@ def process_queue():
                         f"❌ <b>Upload GAGAL!</b>\n"
                         f"Channel : <code>{ch_id}</code>\n"
                         f"Video   : <code>{folder_name}</code>\n"
-                        f"Error   : <code>{str(e)[:300]}</code>"
+                        f"Error   : <code>{type(e).__name__}</code>"
                     )
 
                 finally:
@@ -517,20 +528,28 @@ def process_queue():
                 time.sleep(60)  # Jeda 60 detik antar upload
 
         except Exception as e:
-            logger.error(f"[{ch_id}] Error: {e}")
+            logger.error("[%s] Error (%s)", ch_id, type(e).__name__)
             _status["errors_today"] += 1
 
             # ⚠️ Notif error channel (token expired, dll)
             _send_telegram(
                 f"⚠️ <b>Error channel!</b>\n"
                 f"Channel : <code>{ch_id}</code>\n"
-                f"Error   : <code>{str(e)[:300]}</code>"
+                f"Error   : <code>{type(e).__name__}</code>"
             )
 
 
 def main():
     logger.info("🚀 YouTube Uploader dimulai")
     logger.info(f"   Polling setiap {POLL_INTERVAL_SEC // 60} menit")
+    enabled_channels = _configured_channels()
+    if enabled_channels:
+        logger.info("Channel dengan token terpasang: %s", ", ".join(enabled_channels))
+    else:
+        logger.warning(
+            "Belum ada TOKEN_CH_* terpasang. Service tetap hidup, "
+            "tetapi menunggu kredensial dan tidak akan mengunggah."
+        )
 
     # Notif start — hanya sekali saat pertama jalan
     _send_telegram(
