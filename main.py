@@ -19,7 +19,6 @@ Setup (set env vars di Koyeb):
 import os
 import json
 import time
-import pickle
 import base64
 import tempfile
 import logging
@@ -169,15 +168,51 @@ def _start_health_server():
 # ─── Token helpers ────────────────────────────────────────────────────────────
 
 def _load_creds_from_env(env_key: str):
-    b64 = os.environ.get(env_key)
-    if not b64:
+    """
+    Muat OAuth token Google dari environment variable.
+    Format utama: JSON authorized-user dari Google OAuth.
+    Kompatibilitas: Base64 yang isinya JSON (bukan pickle).
+    """
+    value = os.environ.get(env_key)
+    if not value:
         raise EnvironmentError(f"Env variable '{env_key}' tidak ditemukan.")
-    raw   = base64.b64decode(b64.encode("utf-8"))
-    creds = pickle.loads(raw)
+
+    try:
+        token_info = json.loads(value)
+    except json.JSONDecodeError:
+        try:
+            decoded = base64.b64decode(value.encode("utf-8"), validate=True)
+            token_info = json.loads(decoded.decode("utf-8"))
+        except Exception as exc:
+            raise ValueError(
+                f"'{env_key}' harus berisi OAuth token JSON mentah atau Base64 dari JSON."
+            ) from exc
+
+    if not isinstance(token_info, dict) or not token_info.get("refresh_token"):
+        raise ValueError(
+            f"'{env_key}' bukan OAuth authorized-user JSON yang valid: refresh_token tidak ada."
+        )
+
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+
+    creds = Credentials.from_authorized_user_info(token_info)
     if creds.expired and creds.refresh_token:
-        from google.auth.transport.requests import Request
         creds.refresh(Request())
+    if not creds.valid:
+        raise ValueError(f"Kredensial pada '{env_key}' tidak valid atau gagal diperbarui.")
     return creds
+
+
+def _get_upload_privacy(metadata: dict) -> str:
+    """Privasi upload aman secara default; ubah lewat YOUTUBE_PRIVACY_STATUS."""
+    privacy = os.environ.get("YOUTUBE_PRIVACY_STATUS", "private").strip().lower()
+    allowed = {"private", "unlisted", "public"}
+    if privacy not in allowed:
+        raise ValueError(
+            "YOUTUBE_PRIVACY_STATUS harus private, unlisted, atau public."
+        )
+    return privacy
 
 
 def _get_drive_service(creds):
@@ -262,7 +297,7 @@ def _upload_to_youtube(yt_service, video_path: str, thumbnail_path: str, metadat
             "defaultAudioLanguage": language,
         },
         "status": {
-            "privacyStatus":           "public",
+            "privacyStatus":           _get_upload_privacy(metadata),
             "selfDeclaredMadeForKids": metadata.get("made_for_kids", False),
             "embeddable":              True,
             "publicStatsViewable":     True,
