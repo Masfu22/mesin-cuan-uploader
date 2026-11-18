@@ -345,6 +345,12 @@ def process_queue():
         ch_id   = ch["id"]
         env_key = ch["env_key"]
 
+        # Channel tanpa token memang belum diaktifkan; jangan dianggap error
+        # dan jangan mengirim notifikasi error berulang setiap polling.
+        if not os.environ.get(env_key, "").strip():
+            logger.info(f"[{ch_id}] Token belum dikonfigurasi; channel dilewati.")
+            continue
+
         try:
             creds   = _load_creds_from_env(env_key)
             drive   = _get_drive_service(creds)
@@ -375,9 +381,20 @@ def process_queue():
                 with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
                     meta_path = tmp.name
                 _download_file(drive, meta_id, meta_path)
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    metadata = json.load(f)
-                os.remove(meta_path)
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        metadata = json.load(f)
+                finally:
+                    if os.path.exists(meta_path):
+                        os.remove(meta_path)
+
+                # Jangan pernah mengirim antrean channel A ke akun channel B.
+                if metadata.get("channel_id") != ch_id:
+                    logger.error(
+                        f"[{ch_id}] Queue {folder_name} dilewati: "
+                        f"channel_id metadata tidak cocok."
+                    )
+                    continue
 
                 if metadata.get("status") != "ready":
                     continue
@@ -387,12 +404,17 @@ def process_queue():
                 if publish_at:
                     try:
                         pub_dt = datetime.fromisoformat(publish_at.replace("Z", "+00:00"))
+                        if pub_dt.tzinfo is None:
+                            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
                         if pub_dt > now_utc:
                             logger.info(f"[{ch_id}] {folder_name} belum waktunya, skip.")
                             _status["skipped_today"] += 1
-                            continue  # ← TIDAK kirim notif, cukup log
-                    except Exception:
-                        pass
+                            continue
+                    except Exception as exc:
+                        logger.error(
+                            f"[{ch_id}] {folder_name} dilewati: publish_at tidak valid ({exc})."
+                        )
+                        continue
 
                 # Download video — mulai proses nyata, kirim notif
                 video_id_gdrive = _find_file_in_folder(drive, folder_id, "video.mp4")
