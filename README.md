@@ -84,7 +84,7 @@ The JSON metadata must contain:
 - `title` and `description`
 - optional `tags`, `category_id`, `language`, `publish_at`, `made_for_kids`, `contains_ai_content`
 
-The uploader ignores jobs without `metadata.json`, jobs not marked `ready`, and jobs whose `publish_at` is in the future. An invalid non-empty `publish_at` is skipped rather than uploaded early. After a successful upload, the job folder is moved to `mesin_cuan/done/<channel_id>/`.
+The uploader ignores jobs without `metadata.json`, jobs not marked `ready`, and jobs whose `publish_at` is in the future. An invalid non-empty `publish_at` is skipped rather than uploaded early. After a successful upload, the uploader records `status=uploaded` and the YouTube URL in `metadata.json`, then moves the job folder to `mesin_cuan/done/<channel_id>/`. If archiving is interrupted after the marker is saved, the next poll retries the archive step instead of uploading the same video again.
 
 ## Privacy and publishing
 
@@ -94,7 +94,7 @@ After reviewing test videos and confirming the channel configuration, set `YOUTU
 
 ## Health check and monitoring
 
-The HTTP health endpoint listens on `PORT` (default 8080) and returns JSON status, last poll time, and daily upload/error counts. Configure the hosting provider's health check to call the service root URL.
+The HTTP health endpoint listens on `PORT` (default 8080) and returns JSON status, last poll time, and daily upload/error counts. Configure the hosting provider's health check to call the service root URL. Run a single service instance/replica so two pollers do not process the same Drive queue simultaneously.
 
 Telegram notifications are optional. The service polls every five minutes by default and waits 60 seconds between uploads.
 
