@@ -475,11 +475,19 @@ def process_queue():
                     metadata["status"] = "uploaded"
                     metadata["uploaded_url"] = url
                     metadata["uploaded_at"] = datetime.now(timezone.utc).isoformat()
-                    _update_metadata_file(drive, meta_id, metadata)
+                    try:
+                        _update_metadata_file(drive, meta_id, metadata)
+                    except Exception as marker_error:
+                        logger.error(
+                            f"[{ch_id}] Upload sukses tetapi marker metadata gagal: {marker_error}. "
+                            "Mencoba arsipkan folder agar tidak di-upload ulang."
+                        )
+                        _move_to_done(drive, folder_id, done_id, ch_id)
+                    else:
+                        _move_to_done(drive, folder_id, done_id, ch_id)
 
                     _status["uploads_today"]          += 1
                     _status["per_channel"][ch_id]     += 1
-                    _move_to_done(drive, folder_id, done_id, ch_id)
 
                     # ✅ Notif sukses
                     _send_telegram(
