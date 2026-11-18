@@ -1,108 +1,103 @@
 # Mesin Cuan Uploader
 
-> ☁️ Cloud-side companion for [Mesin Cuan](https://github.com/algojogacor/mesin-cuan) — polls Google Drive, uploads to YouTube, sends Telegram notifications.
+Cloud companion for [Masfu22/mesin-cuan](https://github.com/Masfu22/mesin-cuan). It polls the Google Drive queue created by Mesin Cuan, then uploads ready videos to the matching YouTube channel.
 
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
-[![Deploy to Koyeb](https://img.shields.io/badge/Deploy-Koyeb-4B32C3?style=flat-square)](https://koyeb.com)
+## End-to-end flow
 
----
-
-## What It Does
-
-Part of the **Mesin Cuan two-step architecture**:
-
-```
-Mesin Cuan (local) → renders videos → GDrive Queue
-                                            ↓
-                              Mesin Cuan Uploader (Koyeb)
-                              polls GDrive every 5 min
-                                            ↓
-                                      YouTube Upload
-                                      with paced scheduling
+```text
+GitHub Actions (Masfu22/mesin-cuan)
+  -> generate script, narration, footage and MP4
+  -> QC and metadata
+  -> Google Drive: mesin_cuan/queue/<channel_id>/<job_id>/
+       video.mp4
+       thumbnail.png       (optional)
+       metadata.json
+  -> this uploader (Koyeb / Railway / Docker)
+  -> matching YouTube channel
+  -> Google Drive: mesin_cuan/done/<channel_id>/
 ```
 
-This separation prevents YouTube from detecting bulk uploads from a single IP — the uploader runs on a cloud IP, paced 60s between uploads.
+The queue folder is created by the channel's own Google OAuth identity. The uploader uses that same channel token to read its queue and upload to its YouTube account.
 
----
+## Deploy
 
-## Features
+Deploy this repository as a Docker web service on Koyeb or Railway. The root `Dockerfile` listens on port 8080 and runs `python main.py`.
 
-- **GDrive polling** — checks `mesin_cuan/queue/{channel}/` every 5 minutes
-- **YouTube upload** — resumable upload with metadata, tags, thumbnail, AI-content declaration
-- **Smart scheduling** — respects `publish_at` timestamps, skips videos not yet due
-- **Telegram notifications** — real-time alerts for upload success, failure, errors
-- **Daily summary** — midnight UTC recap per channel with upload counts
-- **Health check** — HTTP server on port 8080 for Koyeb/Uptime.com keep-alive
-- **Auto-retry** — refresh expired OAuth tokens automatically
+### Required environment variables
 
----
+Configure these in the uploader hosting provider's environment/secrets page. Use one OAuth token for each channel you want enabled.
 
-## Quick Deploy
+| Variable | Value |
+|---|---|
+| `TOKEN_CH_ID_HORROR` | OAuth authorized-user JSON for channel `ch_id_horror` |
+| `TOKEN_CH_ID_PSYCH` | OAuth authorized-user JSON for channel `ch_id_psych` |
+| `TOKEN_CH_EN_HORROR` | OAuth authorized-user JSON for channel `ch_en_horror` |
+| `TOKEN_CH_EN_PSYCH` | OAuth authorized-user JSON for channel `ch_en_psych` |
+| `YOUTUBE_PRIVACY_STATUS` | `private` (default), `unlisted`, or `public` |
 
-### 1. Prepare OAuth Tokens
+A channel whose token variable is empty is skipped. At least one channel token is required for uploads.
 
-On your local machine (where Mesin Cuan runs):
+### Optional environment variables
+
+| Variable | Purpose |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token for notifications |
+| `TELEGRAM_CHAT_ID` | Telegram destination chat ID |
+| `PORT` | Health server port; defaults to `8080` |
+| `POLL_INTERVAL_SEC` | Poll interval in seconds; defaults to 300 |
+
+### OAuth token format
+
+Preferred format is the complete OAuth authorized-user JSON produced by Mesin Cuan's `setup_auth.py`. It must contain a refresh token and the Google OAuth fields (`token_uri`, `client_id`, `client_secret`, and scopes).
+
+The uploader also accepts Base64-encoded JSON for compatibility with the Base64 output printed by `setup_auth.py`. It intentionally does **not** accept or unpickle Python pickle files.
+
+Create the tokens from the Mesin Cuan repository, using the matching Google account for each channel:
 
 ```bash
-python setup_auth.py --channel ch_id_horror
+python setup_auth.py
 ```
 
-This generates `data/ch_id_horror/ch_id_horror_token.pickle` — encode it to base64:
+The OAuth consent must grant:
+- YouTube upload: `https://www.googleapis.com/auth/youtube.upload`
+- Google Drive file access: `https://www.googleapis.com/auth/drive.file`
 
-```bash
-base64 -w0 data/ch_id_horror/ch_id_horror_token.pickle
+Copy each channel's token output into the matching environment variable in the hosting provider. Never put tokens in source code, Git commits, issues, screenshots, or chat messages. If a token is exposed, revoke it in the Google account and generate a new one.
+
+## Queue contract
+
+The uploader expects each queue job folder under:
+
+```text
+mesin_cuan/
+  queue/
+    <channel_id>/
+      <job_id>/
+        video.mp4
+        metadata.json
+        thumbnail.png  (optional)
 ```
 
-### 2. Deploy to Koyeb / Railway
+The JSON metadata must contain:
+- `channel_id`: must exactly match the channel folder being processed
+- `status`: must be `ready`
+- `title` and `description`
+- optional `tags`, `category_id`, `language`, `publish_at`, `made_for_kids`, `contains_ai_content`
 
-Set these environment variables:
+The uploader ignores jobs without `metadata.json`, jobs not marked `ready`, and jobs whose `publish_at` is in the future. An invalid non-empty `publish_at` is skipped rather than uploaded early. After a successful upload, the job folder is moved to `mesin_cuan/done/<channel_id>/`.
 
-```env
-# Required — base64-encoded OAuth pickle per channel
-TOKEN_CH_ID_HORROR=<base64-encoded-token>
-TOKEN_CH_ID_PSYCH=<base64-encoded-token>
-TOKEN_CH_EN_HORROR=<base64-encoded-token>
-TOKEN_CH_EN_PSYCH=<base64-encoded-token>
+## Privacy and publishing
 
-# Optional — Telegram notifications
-TELEGRAM_BOT_TOKEN=<your-bot-token>
-TELEGRAM_CHAT_ID=<your-chat-id>
+Uploads default to **private**. This is the safe default and allows a first end-to-end test without accidentally publishing a video.
 
-# Port for health check
-PORT=8080
-```
+After reviewing test videos and confirming the channel configuration, set `YOUTUBE_PRIVACY_STATUS=public` if you want the uploader to publish publicly when each job's `publish_at` time arrives. Use `unlisted` if you prefer unlisted videos. The setting applies to every channel handled by this uploader.
 
-### 3. Set Up Health Check
+## Health check and monitoring
 
-Point Uptime.com (or Koyeb's built-in health check) to `https://your-app.koyeb.app/` — returns JSON with upload stats.
+The HTTP health endpoint listens on `PORT` (default 8080) and returns JSON status, last poll time, and daily upload/error counts. Configure the hosting provider's health check to call the service root URL.
 
----
+Telegram notifications are optional. The service polls every five minutes by default and waits 60 seconds between uploads.
 
-## Architecture
+## Validation
 
-```
-main.py
-├── HealthCheckServer (port 8080)  → Uptime.com keep-alive
-├── process_queue()                → runs every 5 min
-│   ├── iterate CHANNELS
-│   ├── _load_creds_from_env()     → decode OAuth from env
-│   ├── _find_folder()             → locate GDrive folders
-│   ├── _download_file()           → pull video + metadata
-│   ├── _upload_to_youtube()       → resumable upload + thumbnail
-│   └── _move_to_done()            → archive to done/ folder
-├── _check_and_send_daily_summary() → midnight UTC recap
-└── _send_telegram()               → HTML-formatted alerts
-```
-
----
-
-## License
-
-MIT — free to use, modify, and distribute.
-
-See [LICENSE](LICENSE) for full text.
-
----
-
-*Companion to [Mesin Cuan Viral Architect](https://github.com/algojogacor/mesin-cuan)*
+The GitHub Actions validation workflow runs Python syntax compilation and unit tests on pushes and pull requests. A successful CI run checks code-level behavior; it does not prove that Google OAuth, Drive permissions, hosting configuration, or a real YouTube upload works. Those require the user's own credentials and a controlled test video.
